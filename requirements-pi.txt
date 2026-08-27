@@ -1,0 +1,8 @@
+adafruit-circuitpython-ads1x15
+w1thermsensor
+luma.oled
+RPi.GPIO
+joblib
+scikit-learn
+supabase
+numpy

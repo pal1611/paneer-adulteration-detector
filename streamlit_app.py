@@ -1,151 +1,119 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import plotly.express as px
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+st.set_page_config(page_title="Paneer Quality & Adulteration Detector", layout="wide")
+st.title("🧀 Paneer Quality & Adulteration Detection")
+st.caption("Team Innov8 — SIH26_85 — Multimodal edge sensing + Random Forest screening")
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Supabase connection is optional: the dashboard should still work (in Simulate
+# mode) even if no credentials are set, e.g. while testing locally.
+try:
+    from supabase import create_client
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    SUPABASE_AVAILABLE = True
+except Exception:
+    SUPABASE_AVAILABLE = False
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+FEATURE_LABELS = {
+    "pH": "pH",
+    "ec": "Electrical Conductivity (mS/cm)",
+    "turbidity": "Turbidity (NTU)",
+    "temperature": "Temperature (°C)",
+}
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+tab_live, tab_simulate = st.tabs(["📡 Live Results", "🧪 Simulate"])
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
+# ---------------------------------------------------------------------------
+# LIVE TAB — pulls real readings from Supabase
+# ---------------------------------------------------------------------------
+with tab_live:
+    if not SUPABASE_AVAILABLE:
+        st.warning(
+            "Supabase isn't configured yet. Add SUPABASE_URL and SUPABASE_KEY "
+            "to Streamlit secrets to enable live results. Use the Simulate tab "
+            "in the meantime."
         )
+    else:
+        if st.button("🔄 Refresh"):
+            st.rerun()
+
+        result = (
+            supabase.table("paneer_tests")
+            .select("*")
+            .order("timestamp", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        if not result.data:
+            st.info("No readings yet. Run a test on the hardware to see results here.")
+        else:
+            row = result.data[0]
+            label = row.get("predicted_label", "UNKNOWN")
+            confidence = row.get("confidence", 0)
+
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                if label == "PURE":
+                    st.success(f"### ✅ {label}")
+                else:
+                    st.error(f"### ⚠️ {label}")
+                st.metric("Confidence", f"{confidence:.0f}%")
+                st.caption(f"Recorded: {row.get('timestamp', '—')}")
+
+            with col2:
+                readings = {FEATURE_LABELS[k]: row[k] for k in FEATURE_LABELS if k in row}
+                st.table(pd.DataFrame([readings]))
+
+        # Recent trend chart
+        history = (
+            supabase.table("paneer_tests")
+            .select("*")
+            .order("timestamp", desc=True)
+            .limit(20)
+            .execute()
+        )
+        if history.data:
+            hist_df = pd.DataFrame(history.data).sort_values("timestamp")
+            st.subheader("Recent readings")
+            fig = px.line(
+                hist_df, x="timestamp", y=["pH", "ec", "turbidity"],
+                labels={"value": "Reading", "timestamp": "Time", "variable": "Sensor"},
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# SIMULATE TAB — manual demo / fallback mode, no hardware or Supabase needed
+# ---------------------------------------------------------------------------
+with tab_simulate:
+    st.write("Manually enter or simulate a reading to see how the model classifies it.")
+
+    sample_type = st.selectbox("Quick-fill", ["Custom", "Typical Pure Paneer", "Typical Adulterated"])
+
+    defaults = {
+        "Typical Pure Paneer": {"pH": 5.6, "ec": 1.1, "turbidity": 18.0, "temperature": 24.0},
+        "Typical Adulterated": {"pH": 4.4, "ec": 3.5, "turbidity": 70.0, "temperature": 24.0},
+        "Custom": {"pH": 5.6, "ec": 1.1, "turbidity": 18.0, "temperature": 24.0},
+    }[sample_type]
+
+    c1, c2, c3, c4 = st.columns(4)
+    ph = c1.number_input("pH", 0.0, 14.0, defaults["pH"])
+    ec = c2.number_input("EC (mS/cm)", 0.0, 20.0, defaults["ec"])
+    turbidity = c3.number_input("Turbidity (NTU)", 0.0, 200.0, defaults["turbidity"])
+    temperature = c4.number_input("Temperature (°C)", 0.0, 50.0, defaults["temperature"])
+
+    if st.button("Run Random Forest Inference"):
+        try:
+            import joblib
+            model = joblib.load("ml/paneer_rf_v1.pkl")
+            pred = model.predict([[ph, ec, turbidity, temperature]])[0]
+            conf = model.predict_proba([[ph, ec, turbidity, temperature]]).max() * 100
+            if pred == "PURE":
+                st.success(f"Result: PASS — {pred} ({conf:.0f}% confidence)")
+            else:
+                st.error(f"Result: ALERT — {pred} ({conf:.0f}% confidence)")
+        except FileNotFoundError:
+            st.warning("No trained model found at ml/paneer_rf_v1.pkl — run ml/train_model.py first.")
