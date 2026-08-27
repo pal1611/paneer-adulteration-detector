@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(page_title="Paneer Quality & Adulteration Detector", layout="wide")
-st.title("🧀 Paneer Quality & Adulteration Detection")
+st.title("Paneer Quality & Adulteration Detection")
 st.caption("Team Innov8 — SIH26_85 — Multimodal edge sensing + Random Forest screening")
 
 # Supabase connection is optional: the dashboard should still work (in Simulate
